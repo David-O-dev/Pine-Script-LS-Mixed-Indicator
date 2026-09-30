@@ -1,0 +1,99 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Gradation0
+
+//@version=6
+indicator("복합 Long/Short 신호", shorttitle="L/S 신호", overlay=true)
+
+// --- 입력 설정 ---
+hma_len = input.int(9, title="HMA 기간", minval=1)
+ema_len = input.int(30, title="30일 EMA 기간", minval=1) // 60일 이평선을 EMA로 가정 (일반적으로 사용되는 방식)
+rsi_len = input.int(7, title="RSI 기간", minval=1)
+macd_fast_len = input.int(12, title="MACD 빠른 EMA 기간", minval=1)
+macd_slow_len = input.int(26, title="MACD 느린 EMA 기간", minval=1)
+macd_sig_len = input.int(9, title="MACD 시그널 기간", minval=1)
+
+// zone inputs
+MACD_fast_length = input.int(title="MACD Fast Length", defval=7, group = "Zone")
+MACD_slow_length = input.int(title="MACD Slow Length", defval=26, group = "Zone")
+MACD_src = input.source(title="MACD Source", defval=close, group = "Zone")
+MACD_signal_length = input.int(title="MACD Signal Smoothing", minval = 1, maxval = 50, defval = 9, group = "Zone")
+MACD_sma_source = input.bool(title="MACD Simple MA(Oscillator)", defval=false, group = "Zone")
+MACD_sma_signal = input.bool(title="MACD Simple MA(Signal Line)", defval=false, group = "Zone")
+
+MACD_fast_ma = MACD_sma_source ? ta.sma(MACD_src, MACD_fast_length) : ta.ema(MACD_src, MACD_fast_length)
+MACD_slow_ma = MACD_sma_source ? ta.sma(MACD_src, MACD_slow_length) : ta.ema(MACD_src, MACD_slow_length)
+MACD_macd = MACD_fast_ma - MACD_slow_ma
+MACD_signal = MACD_sma_signal ? ta.sma(MACD_macd, MACD_signal_length) : ta.ema(MACD_macd, MACD_signal_length)
+long_cond7 = MACD_macd > MACD_signal
+short_cond7 = MACD_macd < MACD_signal
+
+// --- 3분봉 (현재 차트 시간봉) 데이터 ---
+// HMA 및 30일 이평선 계산 (HMA는 hullma 함수 사용)
+hma3 = request.security(syminfo.tickerid, "3", ta.hma(close, hma_len))
+ema30_3 = request.security(syminfo.tickerid, "3", ta.ema(close, ema_len))
+
+// RSI 계산
+rsi3 = request.security(syminfo.tickerid, "3", ta.rsi(close, rsi_len))
+
+// MACD 계산
+[macd3_line, macd3_sig, macd3_hist] = request.security(syminfo.tickerid, "3", ta.macd(close, macd_fast_len, macd_slow_len, macd_sig_len))
+
+// MACD 골든/데드 크로스 확인
+macd3_golden_cross = ta.cross(macd3_line, macd3_sig) and macd3_line[1] < macd3_sig[1]
+macd3_dead_cross = ta.cross(macd3_sig, macd3_line) and macd3_sig[1] < macd3_line[1]
+
+// --- 30분봉 데이터 ---
+// `request.security()`를 사용하여 30분봉의 종가 확인
+close30 = request.security(syminfo.tickerid, "30", close[0], lookahead=barmerge.lookahead_on)
+// 30분봉 시가 확인
+open30 = request.security(syminfo.tickerid, "30", open[0], lookahead=barmerge.lookahead_on)
+
+is_30min_bullish = close30 > open30
+is_30min_bearish = close30 < open30
+
+
+
+// --- 1분봉 데이터 ---
+// `request.security()`를 사용하여 1분봉 MACD 값 확인
+[macd1_line, macd1_sig, macd1_hist] = request.security(syminfo.tickerid, "1", ta.macd(close[0], macd_fast_len, macd_slow_len, macd_sig_len), lookahead=barmerge.lookahead_on)
+
+// --- 9분봉 데이터 ---
+// `request.security()`를 사용하여 9분봉 RSI 값 확인
+rsi9 = request.security(syminfo.tickerid, "9", ta.rsi(close[0], rsi_len), lookahead=barmerge.lookahead_on)
+
+long_cond1 = is_30min_bullish
+long_cond2 = hma3 > ema30_3 // 위로 크로스 발생 및 현재 HMA가 위에 있는지 확인
+long_cond3 = rsi3 > 52
+long_cond4 = macd1_line > 0
+long_cond5 = macd3_golden_cross
+// long_cond6: 9분봉 RSI가 42 아래에서 42 위로 올라오는 조건
+// rsi9_prev = request.security(syminfo.tickerid, "9", ta.rsi(close[1], rsi_len), lookahead=barmerge.lookahead_on) // 이전 봉의 9분봉 RSI
+// long_cond6 = rsi9 >= 42 and rsi9_prev < 42 
+
+is_long = long_cond1 and long_cond2 and long_cond3 and long_cond4 and long_cond5 and long_cond7
+
+// --- Short 조건 (모두 만족 시) ---  and long_cond6 
+// 1. 30분 음봉: (현재 차트가 3분봉이므로 request.security 사용)
+// 2. 3분 HMA 이평선이 30일 이평선을 아래로 크로스
+// 3. 3분 RSI 42 아래
+// 4. 1분봉 MACD 0선 아래
+// 5. 3분봉 MACD 데드크로스
+// 6. 9분봉 RSI 52 아래(52위에서 52아래)
+short_cond1 = is_30min_bearish
+short_cond2 = hma3 < ema30_3 // 아래로 크로스 발생 및 현재 HMA가 아래에 있는지 확인
+short_cond3 = rsi3 < 42
+short_cond4 = macd1_line < 0
+short_cond5 = macd3_dead_cross
+// short_cond6: 9분봉 RSI가 52 위에서 52 아래로 내려오는 조건
+// short_cond6 = rsi9 <= 52 and rsi9_prev > 52
+
+is_short = short_cond1 and short_cond2 and short_cond3 and short_cond4 and short_cond5 and short_cond7
+//   and short_cond6
+// --- 결과 표시 ---
+// Long 신호 라벨
+if is_long
+    label.new(bar_index, high, text="LONG", style=label.style_label_down, color=color.new(color.lime, 10), textcolor=color.black, size=size.normal)
+
+// Short 신호 라벨
+if is_short
+    label.new(bar_index, high, text="SHORT", style=label.style_label_down, color=color.new(color.red, 10), textcolor=color.white, size=size.normal)
